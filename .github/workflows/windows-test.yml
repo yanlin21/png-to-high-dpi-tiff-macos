@@ -1,0 +1,61 @@
+name: Windows test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  convert:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse PowerShell script
+        shell: powershell
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path '.\png-to-high-dpi-tiff.ps1'),
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | Format-List | Out-String | Write-Error
+            exit 1
+          }
+
+      - name: Convert PNG and verify TIFF DPI
+        shell: powershell
+        run: |
+          Add-Type -AssemblyName System.Drawing
+
+          $pngPath = Join-Path $PWD 'test.png'
+          $tiffPath = Join-Path $PWD 'test.tiff'
+          $bitmap = New-Object System.Drawing.Bitmap(16, 16)
+          try {
+            $bitmap.SetPixel(0, 0, [System.Drawing.Color]::RoyalBlue)
+            $bitmap.Save($pngPath, [System.Drawing.Imaging.ImageFormat]::Png)
+          }
+          finally {
+            $bitmap.Dispose()
+          }
+
+          $env:TIFF_DPI = '300'
+          $env:COMMAND_TOOL_NO_PAUSE = '1'
+          & '.\png-to-high-dpi-tiff.ps1' $pngPath
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Test-Path -LiteralPath $tiffPath)) {
+            throw 'The expected TIFF file was not created.'
+          }
+
+          $output = [System.Drawing.Image]::FromFile($tiffPath)
+          try {
+            if ([Math]::Abs($output.HorizontalResolution - 300) -gt 0.1 -or
+                [Math]::Abs($output.VerticalResolution - 300) -gt 0.1) {
+              throw "Unexpected DPI: $($output.HorizontalResolution) x $($output.VerticalResolution)"
+            }
+          }
+          finally {
+            $output.Dispose()
+          }
